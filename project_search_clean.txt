@@ -1,0 +1,18 @@
+
+autonomous_controller.py:49:                "D:\\AI-Trader\\autonomous_controller.py" in cmd
+autonomous_controller_backup.py:492:subprocess.Popen(
+bot_runner.py:16:    subprocess.run(
+bot_runner.py:17:        ["python", "autonomous_controller.py"]
+discord_bot.py:30:    result = subprocess.run(
+discord_bot.py:31:        [PYTHON, "autonomous_controller.py"],
+discord_bot.py:48:    result = subprocess.run(
+main.py:32:    subprocess.Popen(
+main.py:45:subprocess.run(
+main.py:46:    [python_executable, "autonomous_controller.py"],
+market_runner.py:31:        subprocess.run(
+market_runner.py:32:            ["python", "autonomous_controller.py"]
+trader_loop.py:29:    subprocess.run(
+trader_loop.py:42:        subprocess.run(
+trader_loop.py:45:                "autonomous_controller.py"
+
+

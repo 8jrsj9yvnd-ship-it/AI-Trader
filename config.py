@@ -1,0 +1,11 @@
+# Risk Settings
+RISK_PER_TRADE = 0.01
+MAX_DAILY_LOSS = 0.03
+MAX_OPEN_POSITIONS = 5
+
+# Trade Settings
+STOP_LOSS_PERCENT = 0.02
+TAKE_PROFIT_RATIO = 3.0
+
+# Scanner Settings
+MIN_CONFIDENCE = 80
