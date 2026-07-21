@@ -31,7 +31,7 @@ else {
 $cortex = Get-CimInstance Win32_Process |
 Where-Object {
 
-    $_.CommandLine -like "*D:\AI-Trader\autonomous_controller.py*"
+    $_.CommandLine -like "*autonomous_controller.py*"
 
 }
 
@@ -42,7 +42,9 @@ if (-not $cortex) {
 
     Start-Process $python `
     -WorkingDirectory "D:\AI-Trader" `
-    -ArgumentList "D:\AI-Trader\autonomous_controller.py"
+    -ArgumentList "D:\AI-Trader\autonomous_controller.py" `
+    -RedirectStandardOutput "D:\AI-Trader\autonomous_controller.out.log" `
+    -RedirectStandardError "D:\AI-Trader\autonomous_controller.err.log"
 
 
     Write-Output "Cortex started"
@@ -63,7 +65,7 @@ else {
 $discord = Get-CimInstance Win32_Process |
 Where-Object {
 
-    $_.CommandLine -like "*D:\AI-Trader\cortex_discord.py*"
+    $_.CommandLine -like "*cortex_discord.py*"
 
 }
 
@@ -74,7 +76,9 @@ if (-not $discord) {
 
     Start-Process $python `
     -WorkingDirectory "D:\AI-Trader" `
-    -ArgumentList "D:\AI-Trader\cortex_discord.py"
+    -ArgumentList "D:\AI-Trader\cortex_discord.py" `
+    -RedirectStandardOutput "D:\AI-Trader\cortex_discord.out.log" `
+    -RedirectStandardError "D:\AI-Trader\cortex_discord.err.log"
 
 
     Write-Output "Discord started"

@@ -6,5 +6,8 @@ cortex_memory.json
 trade_memory.json
 trades.json
 position_targets.json
+*.lock
+*.out.log
+*.err.log
 cortex_debug.txt
 startup_log.txt

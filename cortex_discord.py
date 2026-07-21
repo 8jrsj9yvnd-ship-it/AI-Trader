@@ -1,11 +1,17 @@
 import os
+import sys
 import discord
 import ollama
 from discord.ext import commands
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
+from instance_lock import acquire_lock
 
 load_dotenv()
+
+if not acquire_lock("cortex_discord"):
+    print("Cortex Discord is already running. Exiting.")
+    sys.exit(0)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 

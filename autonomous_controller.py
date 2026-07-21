@@ -6,6 +6,7 @@ from risk_manager import calculate_position_size
 from safety_controller import check_safety
 from position_monitor import monitor_positions
 from position_targets import save_target
+from instance_lock import acquire_lock
 import config
 
 from alpaca.trading.client import TradingClient
@@ -20,7 +21,6 @@ import os
 import time
 from cortex_learning import log_trade as log_learning, learning_summary, get_learning_context
 import sys
-import psutil
 from datetime import datetime
 
 
@@ -31,38 +31,11 @@ load_dotenv()
 # SINGLE INSTANCE PROTECTION
 # ===============================
 
-def already_running():
+if not acquire_lock("autonomous_controller"):
 
-    current_pid = os.getpid()
+    print("Cortex is already running. Exiting.")
 
-    for process in psutil.process_iter(
-        ["pid", "cmdline"]
-    ):
-
-        try:
-
-            if process.info["pid"] == current_pid:
-                continue
-
-            cmd = " ".join(
-                process.info["cmdline"] or []
-            )
-
-            if (
-                "autonomous_controller.py" in cmd
-                and "D:\\AI-Trader\\venv\\Scripts\\python.exe" in cmd
-            ):
-                return True
-
-        except:
-            pass
-
-    return False
-
-
-
-# Single instance check disabled
-# Duplicate launchers removed
+    sys.exit(0)
 
 
 
