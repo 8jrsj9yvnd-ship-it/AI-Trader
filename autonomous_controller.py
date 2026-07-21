@@ -1,5 +1,5 @@
 from daily_risk import check_daily_loss
-from trade_logger import log_trade
+from trade_logger import log_trade as record_trade
 from market_filter import market_is_good
 from stock_scanner import analyze_stock, stocks
 from risk_manager import calculate_position_size
@@ -15,7 +15,7 @@ import ollama
 import json
 import os
 import time
-from cortex_learning import log_trade, learning_summary, get_learning_context
+from cortex_learning import log_trade as log_learning, learning_summary, get_learning_context
 import sys
 import psutil
 from datetime import datetime
@@ -476,11 +476,8 @@ def run_cycle():
 
     result = alpaca.submit_order(order)
 
-
-    result = alpaca.submit_order(order)
-
     if result:
-        log_trade(
+        log_learning(
             symbol,
             float(result.filled_avg_price) if result.filled_avg_price else 0,
             0,
@@ -495,7 +492,7 @@ def run_cycle():
     )
 
 
-    log_trade({
+    record_trade({
 
         "symbol":symbol,
 
