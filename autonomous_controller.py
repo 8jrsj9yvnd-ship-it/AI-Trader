@@ -4,6 +4,8 @@ from market_filter import market_is_good
 from stock_scanner import analyze_stock, stocks
 from risk_manager import calculate_position_size
 from safety_controller import check_safety
+from position_monitor import monitor_positions
+import config
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -451,7 +453,7 @@ def run_cycle():
 
         sizing["shares"],
 
-        20
+        config.MAX_SHARES_PER_TRADE
 
     )
 
@@ -539,6 +541,8 @@ while True:
 
         if clock.is_open:
 
+
+            monitor_positions()
 
             run_cycle()
 

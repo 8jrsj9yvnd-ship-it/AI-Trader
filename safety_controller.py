@@ -1,6 +1,7 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from dotenv import load_dotenv
+import config
 import os
 
 load_dotenv()
@@ -11,7 +12,6 @@ client = TradingClient(
     paper=True
 )
 
-MAX_POSITIONS = 3
 MAX_OPEN_ORDERS = 3
 
 
@@ -36,7 +36,7 @@ def check_safety(symbol):
             return False, "Already have an open order for this stock"
 
 
-    if len(positions) >= MAX_POSITIONS:
+    if len(positions) >= config.MAX_OPEN_POSITIONS:
         return False, "Maximum positions reached"
 
 

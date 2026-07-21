@@ -1,5 +1,6 @@
 from alpaca.trading.client import TradingClient
 from dotenv import load_dotenv
+import config
 import os
 
 
@@ -11,9 +12,6 @@ alpaca = TradingClient(
     os.getenv("ALPACA_SECRET_KEY"),
     paper=True
 )
-
-
-MAX_DAILY_LOSS = 500
 
 
 def check_daily_loss():
@@ -28,11 +26,13 @@ def check_daily_loss():
 
     loss = max(0, last_equity - equity)
 
+    max_daily_loss = last_equity * config.MAX_DAILY_LOSS
 
-    print("Daily Loss:", round(loss, 2))
+
+    print("Daily Loss:", round(loss, 2), "/ Limit:", round(max_daily_loss, 2))
 
 
-    if loss >= MAX_DAILY_LOSS:
+    if loss >= max_daily_loss:
 
         return False, "Daily loss limit reached"
 
