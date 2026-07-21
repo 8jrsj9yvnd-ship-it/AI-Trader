@@ -358,7 +358,7 @@ def run_cycle():
         return
 
 
-    if decision["confidence"] < 80:
+    if decision["confidence"] < config.MIN_CONFIDENCE:
         return
 
 
@@ -402,7 +402,7 @@ def run_cycle():
         )
 
         return
-    if selected["score"] < 75:
+    if selected["score"] < config.MIN_ENTRY_SCORE:
 
         print(
             "SKIPPING SCORE TOO LOW"

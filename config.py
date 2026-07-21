@@ -11,3 +11,4 @@ ATR_STOP_MULTIPLIER = 1.5  # stop = entry - ATR_STOP_MULTIPLIER * ATR (falls bac
 
 # Scanner Settings
 MIN_CONFIDENCE = 80
+MIN_ENTRY_SCORE = 80  # backtested: better win rate/consistency than 75 across the watchlist, similar avg return
