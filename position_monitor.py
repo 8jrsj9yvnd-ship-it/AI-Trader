@@ -1,6 +1,7 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from cortex_learning import log_trade
+from position_targets import get_target, clear_target
 import config
 from alpaca.trading.enums import OrderSide, TimeInForce
 from dotenv import load_dotenv
@@ -53,18 +54,39 @@ def monitor_positions():
         print("Return:", round(change * 100, 2), "%")
 
 
-        if change <= -STOP_LOSS_PERCENT:
+        target = get_target(symbol)
 
-            print("STOP LOSS TRIGGERED")
+        if target:
 
-            close_position(symbol)
+            print("Stop:", target["stop"], "Target:", target["target"])
+
+            if current <= target["stop"]:
+
+                print("STOP LOSS TRIGGERED")
+
+                close_position(symbol)
+
+            elif current >= target["target"]:
+
+                print("TAKE PROFIT TRIGGERED")
+
+                close_position(symbol)
 
 
-        elif change >= TAKE_PROFIT_PERCENT:
+        else:
 
-            print("TAKE PROFIT TRIGGERED")
+            if change <= -STOP_LOSS_PERCENT:
 
-            close_position(symbol)
+                print("STOP LOSS TRIGGERED")
+
+                close_position(symbol)
+
+
+            elif change >= TAKE_PROFIT_PERCENT:
+
+                print("TAKE PROFIT TRIGGERED")
+
+                close_position(symbol)
 
 
 
@@ -92,6 +114,8 @@ def close_position(symbol):
         profit_loss,
         "Exited by Cortex risk management"
     )
+
+    clear_target(symbol)
 
     print("CLOSED:")
     print(result)

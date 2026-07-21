@@ -1,7 +1,7 @@
 import config
 
 
-def calculate_position_size(account_value, entry_price):
+def calculate_position_size(account_value, entry_price, atr=None):
     """
     Cortex Risk Manager
 
@@ -11,6 +11,9 @@ def calculate_position_size(account_value, entry_price):
     - Take profit
     - Share size
     - Position value
+
+    If atr is provided, the stop distance is volatility-adjusted
+    (ATR_STOP_MULTIPLIER * atr) instead of a flat STOP_LOSS_PERCENT.
     """
 
 
@@ -29,10 +32,16 @@ def calculate_position_size(account_value, entry_price):
 
 
     # Stop loss calculation
-    stop_loss = round(
-        entry_price * (1 - config.STOP_LOSS_PERCENT),
-        2
-    )
+    if atr and atr > 0:
+        stop_loss = round(
+            entry_price - (config.ATR_STOP_MULTIPLIER * atr),
+            2
+        )
+    else:
+        stop_loss = round(
+            entry_price * (1 - config.STOP_LOSS_PERCENT),
+            2
+        )
 
 
     risk_per_share = round(

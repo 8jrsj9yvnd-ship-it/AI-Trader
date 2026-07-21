@@ -5,6 +5,7 @@ from stock_scanner import analyze_stock, stocks
 from risk_manager import calculate_position_size
 from safety_controller import check_safety
 from position_monitor import monitor_positions
+from position_targets import save_target
 import config
 
 from alpaca.trading.client import TradingClient
@@ -444,7 +445,9 @@ def run_cycle():
 
         float(account.equity),
 
-        price
+        price,
+
+        atr=selected.get("atr")
 
     )
 
@@ -485,6 +488,12 @@ def run_cycle():
             0,
             0,
             decision["reason"]
+        )
+
+        save_target(
+            symbol,
+            sizing["stop_loss"],
+            sizing["take_profit"]
         )
 
 
