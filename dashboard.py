@@ -190,6 +190,21 @@ def get_alpaca_client():
     )
 
 
+@st.cache_data(ttl=300)
+def get_ytd_return(current_equity):
+    """Percent change from the first equity value on record this calendar year
+    to now. Note: for a newly-funded account, that first value is the funding
+    date, not Jan 1 -- Alpaca zero-pads days before the account existed, so we
+    skip those rather than treat $0 as a real starting balance."""
+    req = GetPortfolioHistoryRequest(start=datetime(datetime.now().year, 1, 1), end=datetime.now(), timeframe="1D")
+    hist = get_alpaca_client().get_portfolio_history(req)
+    for eq in hist.equity:
+        if eq:
+            start_equity = eq
+            return (current_equity - start_equity) / start_equity * 100
+    return None
+
+
 @st.cache_data(ttl=60)
 def get_equity_curve():
     req = GetPortfolioHistoryRequest(period="1D", timeframe="15Min")
@@ -341,6 +356,13 @@ try:
     delta_class = "cx-hero-delta-good" if day_pl >= 0 else "cx-hero-delta-bad"
     arrow = "▲" if day_pl >= 0 else "▼"
 
+    ytd_pct = get_ytd_return(equity)
+    ytd_line = ""
+    if ytd_pct is not None:
+        ytd_class = "cx-hero-delta-good" if ytd_pct >= 0 else "cx-hero-delta-bad"
+        ytd_arrow = "▲" if ytd_pct >= 0 else "▼"
+        ytd_line = f'<div class="{ytd_class}" style="margin-top:2px;">{ytd_arrow} {ytd_pct:+.2f}% YTD</div>'
+
     hero_col, rest_col = st.columns([1.3, 2])
 
     with hero_col:
@@ -349,6 +371,7 @@ try:
             <div class="cx-hero-label">Equity</div>
             <div class="cx-hero-value">${equity:,.2f}</div>
             <div class="{delta_class}">{arrow} ${day_pl:,.2f} ({day_pl_pct:+.2f}%) today</div>
+            {ytd_line}
         </div>
         """, unsafe_allow_html=True)
 
