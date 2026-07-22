@@ -384,7 +384,7 @@ def run_cycle():
         return
 
 
-    if selected["volume_strength"] < 1.0:
+    if selected["volume_strength"] < config.MIN_VOLUME_STRENGTH:
 
         print(
             "SKIPPING WEAK VOLUME"

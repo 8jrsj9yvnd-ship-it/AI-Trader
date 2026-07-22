@@ -1,13 +1,23 @@
+import asyncio
 import os
 import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+
 import discord
-import ollama
+import pyttsx3
 from discord.ext import commands
 from dotenv import load_dotenv
-from alpaca.trading.client import TradingClient
 from instance_lock import acquire_lock, is_locked
+from cortex_context import alpaca, get_alpaca_context, ask_cortex_ollama
 
 load_dotenv()
+
+# NOTE: Discord requires E2EE (the DAVE protocol) on every voice call as of
+# March 2026, with no opt-out. Sending audio into a call works fine (discord.py
+# handles DAVE encryption for us), but no public library currently implements
+# DAVE's receive-side decryption, so a bot cannot understand voice sent by
+# real users. This bot can therefore speak into voice channels but not listen.
 
 if not acquire_lock("cortex_discord"):
     print("Cortex Discord is already running. Exiting.")
@@ -15,49 +25,6 @@ if not acquire_lock("cortex_discord"):
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-alpaca = TradingClient(
-    os.getenv("ALPACA_API_KEY"),
-    os.getenv("ALPACA_SECRET_KEY"),
-    paper=True
-)
-
-def get_alpaca_context():
-
-    try:
-        account = alpaca.get_account()
-        positions = alpaca.get_all_positions()
-
-        context = f"""
-ALPACA ACCOUNT DATA:
-
-Cash:
-${account.cash}
-
-Buying Power:
-${account.buying_power}
-
-Equity:
-${account.equity}
-
-OPEN POSITIONS:
-"""
-
-        if positions:
-            for p in positions:
-                context += f"""
-{p.symbol}
-Shares: {p.qty}
-Entry Price: {p.avg_entry_price}
-Current Price: {p.current_price}
-Unrealized P/L: ${p.unrealized_pl}
-"""
-        else:
-            context += "\nNo open positions."
-
-        return context
-
-    except Exception as e:
-        return f"Unable to retrieve Alpaca data: {e}"
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -66,6 +33,11 @@ bot = commands.Bot(
     intents=intents,
     help_command=None
 )
+
+voice_sessions = {}  # guild_id -> VoiceSession
+tts_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cortex-tts")
+
+
 @bot.event
 async def on_ready():
     print(f"Cortex Discord Online: {bot.user}")
@@ -84,49 +56,17 @@ async def on_message(message):
     await message.channel.typing()
 
     try:
-        response = ollama.chat(
-            model="hermes3:latest",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are Cortex, a helpful AI assistant and trading assistant. "
-                        "You can answer general questions, explain concepts, help with coding, "
-                        "and discuss investing and trading. "
-                        "Be concise, accurate, and conversational."
-                    ),
-                },
-                {
-                    "role": "user",
-"content": f"""
-Live Alpaca Account Data:
-
-{get_alpaca_context()}
-
-User Message:
-{message.content}
-
-Use the account data above when answering questions about:
-- profit
-- positions
-- trades
-- cash
-- portfolio
-- performance
-
-Answer naturally as Cortex.
-"""
-                },
-            ],
-        )
-
-        reply = response["message"]["content"]
+        reply = await asyncio.to_thread(ask_cortex_ollama, message.content)
 
         if len(reply) > 1900:
             for i in range(0, len(reply), 1900):
                 await message.channel.send(reply[i:i + 1900])
         else:
             await message.channel.send(reply)
+
+        session = voice_sessions.get(message.guild.id) if message.guild else None
+        if session is not None:
+            await speak_in_session(session, reply)
 
     except Exception as e:
         await message.channel.send(f"⚠️ Cortex error: {e}")
@@ -203,4 +143,127 @@ async def hello(ctx):
     await ctx.send(
         "Hello! I'm Cortex. Ask me anything, or use !status / !positions."
     )
+
+
+class VoiceSession:
+
+    def __init__(self, guild, vc, text_channel):
+        self.guild = guild
+        self.vc = vc
+        self.text_channel = text_channel
+        self.speaking = asyncio.Lock()
+
+
+def synthesize_tts(text):
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+
+    engine = pyttsx3.init()
+    try:
+        engine.save_to_file(text, path)
+        engine.runAndWait()
+    finally:
+        engine.stop()
+
+    return path
+
+
+async def play_and_wait(vc, path):
+    loop = asyncio.get_running_loop()
+    done = asyncio.Event()
+
+    def after(error):
+        if error:
+            print(f"[voice] playback error: {error}")
+        loop.call_soon_threadsafe(done.set)
+
+    source = discord.FFmpegPCMAudio(path)
+    vc.play(source, after=after)
+    await done.wait()
+
+
+async def speak_in_session(session, text):
+    async with session.speaking:
+        loop = asyncio.get_running_loop()
+        try:
+            path = await loop.run_in_executor(tts_executor, synthesize_tts, text)
+        except Exception as e:
+            await session.text_channel.send(f"⚠️ Cortex voice error (TTS): {e}")
+            return
+
+        try:
+            await play_and_wait(session.vc, path)
+        except Exception as e:
+            await session.text_channel.send(f"⚠️ Cortex voice error (playback): {e}")
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+async def teardown_session(session):
+    try:
+        await session.vc.disconnect(force=True)
+    except Exception:
+        pass
+
+
+@bot.command()
+async def join(ctx):
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.send("You need to be in a voice channel first.")
+        return
+
+    if ctx.guild.id in voice_sessions:
+        await ctx.send("Already in a voice session in this server. Use !leave first.")
+        return
+
+    try:
+        vc = await ctx.author.voice.channel.connect()
+    except Exception as e:
+        await ctx.send(f"Could not join voice channel: {e}")
+        return
+
+    session = VoiceSession(ctx.guild, vc, ctx.channel)
+    voice_sessions[ctx.guild.id] = session
+
+    await ctx.send(
+        f"🎙️ Joined {ctx.author.voice.channel.name}. "
+        "I can speak here — talk to me in text and I'll answer out loud too, "
+        "or use !say <text>."
+    )
+
+
+@bot.command()
+async def say(ctx, *, text: str):
+    session = voice_sessions.get(ctx.guild.id)
+    if session is None:
+        await ctx.send("I'm not in a voice channel. Use !join first.")
+        return
+
+    await speak_in_session(session, text)
+
+
+@bot.command()
+async def leave(ctx):
+    session = voice_sessions.pop(ctx.guild.id, None)
+    if session is None:
+        await ctx.send("Not currently in a voice session.")
+        return
+
+    await teardown_session(session)
+    await ctx.send("👋 Left the voice channel.")
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.id != bot.user.id or after.channel is not None:
+        return
+
+    session = voice_sessions.pop(member.guild.id, None)
+    if session is not None:
+        await teardown_session(session)
+
+
 bot.run(TOKEN)

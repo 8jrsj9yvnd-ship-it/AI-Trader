@@ -13,6 +13,16 @@ import config
 
 load_dotenv()
 
+# Streamlit Community Cloud provides credentials via st.secrets, not a .env file.
+# Mirror them into os.environ so the existing os.getenv(...) calls below work unchanged
+# both locally (no secrets.toml -- st.secrets raises, just fall back to .env) and when deployed.
+try:
+    for _key in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
+        if _key in st.secrets and not os.getenv(_key):
+            os.environ[_key] = st.secrets[_key]
+except Exception:
+    pass
+
 st.set_page_config(
     page_title="Cortex Trading AI",
     page_icon="🧠",

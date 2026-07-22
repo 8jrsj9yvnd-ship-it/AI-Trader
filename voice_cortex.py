@@ -1,7 +1,10 @@
 import speech_recognition as sr
 import pyttsx3
-import ollama
+from dotenv import load_dotenv
 
+from cortex_context import ask_cortex_ollama, get_alpaca_context
+
+load_dotenv()
 
 engine = pyttsx3.init()
 
@@ -28,30 +31,28 @@ def listen():
         print("You:", text)
         return text
 
-    except:
+    except sr.UnknownValueError:
+        print("(didn't catch that)")
+        return ""
+
+    except sr.RequestError as e:
+        print(f"(speech recognition service error: {e})")
         return ""
 
 
 def ask_cortex(message):
+    return ask_cortex_ollama(message, get_alpaca_context())
 
-    response = ollama.chat(
-        model="hermes3:latest",
-        messages=[
-            {
-                "role": "user",
-                "content": message
-            }
-        ]
-    )
 
-    return response["message"]["content"]
-
+print("Cortex voice assistant ready. Say something, or say 'quit' to exit.")
+speak("Cortex online. Go ahead.")
 
 while True:
 
     user = listen()
 
-    if user.lower() == "quit":
+    if user.lower() in ("quit", "exit", "stop"):
+        speak("Goodbye.")
         break
 
     if user:
