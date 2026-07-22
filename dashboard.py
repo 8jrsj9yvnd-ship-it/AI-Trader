@@ -2,10 +2,12 @@ import json
 import os
 from datetime import datetime, timezone
 
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetPortfolioHistoryRequest
 
 from instance_lock import is_locked
 from position_targets import get_target
@@ -150,7 +152,7 @@ st.markdown("""
 .cx-muted { color: var(--text-muted); font-size: 0.82rem; font-style: normal; }
 
 .cx-meter-label { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-secondary); margin-top: 8px; }
-.cx-meter-track { background: rgba(57,135,229,0.15); height: 6px; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.cx-meter-track { height: 6px; border-radius: 3px; overflow: hidden; margin-top: 4px; }
 .cx-meter-fill { height: 100%; border-radius: 3px; }
 
 .stButton button {
@@ -159,6 +161,22 @@ st.markdown("""
     border: 1px solid var(--border);
 }
 .stButton button:hover { border-color: var(--accent); color: var(--accent-soft); }
+
+/* native st.info/st.error/st.success alert boxes default to a light theme
+   that clashes hard against this dark surface -- recolor them onto the
+   same tokens as everything else instead of leaving Streamlit's defaults */
+[data-testid="stAlert"] {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+[data-testid="stAlertContentInfo"] { color: var(--text-secondary); }
+[data-testid="stAlertContentError"] { color: var(--critical); }
+[data-testid="stAlertContentInfo"] svg, [data-testid="stAlertContentError"] svg { display: none; }
+
+.cx-badge-good  { color: var(--good); font-weight: 600; }
+.cx-badge-warn  { color: var(--warning); font-weight: 600; }
+.cx-badge-muted { color: var(--text-muted); font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -170,6 +188,62 @@ def get_alpaca_client():
         os.getenv("ALPACA_SECRET_KEY"),
         paper=True
     )
+
+
+@st.cache_data(ttl=60)
+def get_equity_curve():
+    req = GetPortfolioHistoryRequest(period="1D", timeframe="15Min")
+    hist = get_alpaca_client().get_portfolio_history(req)
+    points = [
+        (datetime.fromtimestamp(t), eq)
+        for t, eq in zip(hist.timestamp, hist.equity)
+        if eq is not None
+    ]
+    return points
+
+
+def render_equity_chart(points):
+    if len(points) < 2:
+        st.info("Not enough intraday data yet to plot today's equity curve.")
+        return
+
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    line_color = "#3987e5"
+
+    # Equity moves within a narrow band relative to its absolute level -- autorange
+    # to the data (never force a zero baseline, or the day's real movement flattens
+    # to an invisible sliver at the top of an otherwise-empty chart).
+    pad = max((max(ys) - min(ys)) * 0.15, 1)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys,
+        mode="lines",
+        line=dict(color=line_color, width=2, shape="spline", smoothing=0.3),
+        hovertemplate="$%{y:,.2f}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=220,
+        margin=dict(l=0, r=0, t=8, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#1a1a19", bordercolor="rgba(255,255,255,0.10)", font_color="#ffffff"),
+        showlegend=False,
+        xaxis=dict(
+            showgrid=False, zeroline=False,
+            tickfont=dict(color="#898781", size=11),
+            tickformat="%H:%M",
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor="#2c2c2a", gridwidth=1, zeroline=False,
+            tickfont=dict(color="#898781", size=11),
+            tickprefix="$", tickformat=",.0f",
+            range=[min(ys) - pad, max(ys) + pad],
+        ),
+    )
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
 @st.cache_data(ttl=300)
@@ -283,6 +357,12 @@ try:
         b.metric("Cash", f"${float(account.cash):,.2f}")
         c.metric("Buying Power", f"${float(account.buying_power):,.2f}")
 
+    st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+    try:
+        render_equity_chart(get_equity_curve())
+    except Exception as e:
+        st.info(f"Equity chart unavailable: {e}")
+
 except Exception as e:
     st.error(f"Unable to load account: {e}")
 
@@ -380,11 +460,11 @@ try:
         with col:
             score = s["score"]
             if score >= 75:
-                meter_color, badge_class = "var(--good)", "cx-delta-good"
+                meter_color, track_color, badge_class = "#0ca30c", "rgba(12,163,12,0.15)", "cx-badge-good"
             elif score >= 50:
-                meter_color, badge_class = "var(--warning)", "cx-delta-good"
+                meter_color, track_color, badge_class = "#fab219", "rgba(250,178,25,0.15)", "cx-badge-warn"
             else:
-                meter_color, badge_class = "var(--text-muted)", "cx-muted"
+                meter_color, track_color, badge_class = "#898781", "rgba(137,135,129,0.15)", "cx-badge-muted"
 
             st.markdown(f"""
             <div class="cx-card">
@@ -392,7 +472,7 @@ try:
                 <div class="cx-card-row">Price: <b>${s['price']}</b> &nbsp; RSI: <b>{s['rsi']}</b></div>
                 <div class="cx-card-row"><span class="{badge_class}">{s['bias']}</span></div>
                 <div class="cx-meter-label"><span>Score</span><span>{score}/100</span></div>
-                <div class="cx-meter-track"><div class="cx-meter-fill" style="width:{score}%; background:{meter_color};"></div></div>
+                <div class="cx-meter-track" style="background:{track_color};"><div class="cx-meter-fill" style="width:{score}%; background:{meter_color};"></div></div>
             </div>
             """, unsafe_allow_html=True)
 
