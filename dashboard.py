@@ -9,6 +9,7 @@ LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetPortfolioHistoryRequest
@@ -73,6 +74,11 @@ st.set_page_config(
     layout="wide"
 )
 
+# Refresh the whole page automatically -- no manual click, and it's what keeps
+# the "Local Time" pill (and everything else) actually live instead of a frozen
+# snapshot from whenever the page happened to load.
+st_autorefresh(interval=30_000, key="cortex_autorefresh")
+
 st.markdown("""
 <style>
 :root {
@@ -107,7 +113,7 @@ st.markdown("""
     text-align: center;
     font-weight: 700;
     letter-spacing: 3px;
-    font-size: 2.3rem;
+    font-size: 3.4rem;
     margin-bottom: 0;
     background: linear-gradient(90deg, var(--accent), var(--accent-soft));
     -webkit-background-clip: text;
@@ -315,7 +321,7 @@ def status_pill(label, value, state):
 
 st.markdown("""
 <div style="display:flex; align-items:center; justify-content:center; gap:14px;">
-    <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg width="76" height="76" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
         <defs>
             <linearGradient id="cortexGrad" x1="0" y1="0" x2="52" y2="52" gradientUnits="userSpaceOnUse">
                 <stop offset="0" stop-color="#3987e5"/>
@@ -339,15 +345,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 st.markdown('<div class="cx-caption">Autonomous Market Intelligence &amp; Trading System</div>', unsafe_allow_html=True)
-
-col_refresh, col_time = st.columns([1, 5])
-with col_refresh:
-    if st.button("🔄 Refresh"):
-        st.cache_data.clear()
-        st.rerun()
-with col_time:
-    st.markdown(f'<div style="color:var(--text-muted); padding-top:8px;">Last updated: {datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")}</div>', unsafe_allow_html=True)
-
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
 
