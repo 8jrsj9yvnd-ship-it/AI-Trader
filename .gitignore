@@ -11,3 +11,4 @@ position_targets.json
 *.err.log
 cortex_debug.txt
 startup_log.txt
+.claude/settings.local.json
