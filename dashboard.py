@@ -1,5 +1,6 @@
 import json
 import os
+import urllib.parse
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -51,9 +52,24 @@ try:
 except Exception:
     pass
 
+_FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 52">
+<rect x="1.5" y="1.5" width="49" height="49" rx="14" fill="#0d0d0d" stroke="#3987e5" stroke-width="2"/>
+<line x1="26" y1="26" x2="13" y2="15" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<line x1="26" y1="26" x2="39" y2="15" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<line x1="26" y1="26" x2="13" y2="37" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<line x1="26" y1="26" x2="39" y2="37" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<line x1="26" y1="26" x2="26" y2="9"  stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<circle cx="13" cy="15" r="3.4" fill="#6da7ec"/>
+<circle cx="39" cy="15" r="3.4" fill="#6da7ec"/>
+<circle cx="13" cy="37" r="3.4" fill="#6da7ec"/>
+<circle cx="39" cy="37" r="3.4" fill="#6da7ec"/>
+<circle cx="26" cy="9"  r="2.8" fill="#6da7ec"/>
+<circle cx="26" cy="26" r="6.2" fill="#6da7ec"/>
+</svg>"""
+
 st.set_page_config(
     page_title="Cortex Trading AI",
-    page_icon="🧠",
+    page_icon=f"data:image/svg+xml;utf8,{urllib.parse.quote(_FAVICON_SVG)}",
     layout="wide"
 )
 
@@ -297,7 +313,31 @@ def status_pill(label, value, state):
     """, unsafe_allow_html=True)
 
 
-st.markdown('<div class="cx-title">🧠 CORTEX TRADING AI</div>', unsafe_allow_html=True)
+st.markdown("""
+<div style="display:flex; align-items:center; justify-content:center; gap:14px;">
+    <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="cortexGrad" x1="0" y1="0" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#3987e5"/>
+                <stop offset="1" stop-color="#6da7ec"/>
+            </linearGradient>
+        </defs>
+        <rect x="1.5" y="1.5" width="49" height="49" rx="14" stroke="url(#cortexGrad)" stroke-width="2"/>
+        <line x1="26" y1="26" x2="13" y2="15" stroke="url(#cortexGrad)" stroke-width="2" stroke-linecap="round"/>
+        <line x1="26" y1="26" x2="39" y2="15" stroke="url(#cortexGrad)" stroke-width="2" stroke-linecap="round"/>
+        <line x1="26" y1="26" x2="13" y2="37" stroke="url(#cortexGrad)" stroke-width="2" stroke-linecap="round"/>
+        <line x1="26" y1="26" x2="39" y2="37" stroke="url(#cortexGrad)" stroke-width="2" stroke-linecap="round"/>
+        <line x1="26" y1="26" x2="26" y2="9"  stroke="url(#cortexGrad)" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="13" cy="15" r="3"   fill="url(#cortexGrad)"/>
+        <circle cx="39" cy="15" r="3"   fill="url(#cortexGrad)"/>
+        <circle cx="13" cy="37" r="3"   fill="url(#cortexGrad)"/>
+        <circle cx="39" cy="37" r="3"   fill="url(#cortexGrad)"/>
+        <circle cx="26" cy="9"  r="2.5" fill="url(#cortexGrad)"/>
+        <circle cx="26" cy="26" r="5.5" fill="url(#cortexGrad)"/>
+    </svg>
+    <div class="cx-title" style="margin-bottom:0;">CORTEX TRADING AI</div>
+</div>
+""", unsafe_allow_html=True)
 st.markdown('<div class="cx-caption">Autonomous Market Intelligence &amp; Trading System</div>', unsafe_allow_html=True)
 
 col_refresh, col_time = st.columns([1, 5])
