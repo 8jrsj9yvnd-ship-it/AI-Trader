@@ -6,7 +6,8 @@ from risk_manager import calculate_position_size
 from safety_controller import check_safety
 from position_monitor import monitor_positions
 from position_targets import save_target
-from instance_lock import acquire_lock
+from instance_lock import acquire_lock, is_locked
+from heartbeat import write_heartbeat
 import config
 
 from alpaca.trading.client import TradingClient
@@ -511,12 +512,19 @@ print(
 system_check()
 
 
+HEARTBEAT_INTERVAL = 60
+_last_heartbeat = 0
+
 
 while True:
 
 
     try:
 
+        now = time.time()
+        if now - _last_heartbeat >= HEARTBEAT_INTERVAL:
+            write_heartbeat(True, is_locked("cortex_discord"))
+            _last_heartbeat = now
 
         clock = alpaca.get_clock()
 

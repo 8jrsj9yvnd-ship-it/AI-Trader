@@ -1,7 +1,8 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
+import requests
 import streamlit as st
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
@@ -10,6 +11,28 @@ from instance_lock import is_locked
 from position_targets import get_target
 from stock_scanner import analyze_stock, stocks as WATCHLIST
 import config
+
+HEARTBEAT_GIST_URL = "https://gist.githubusercontent.com/8jrsj9yvnd-ship-it/4518b5abd44289f1104c63aac5e5d0ee/raw/status.json"
+HEARTBEAT_STALE_AFTER_SECONDS = 150
+
+
+@st.cache_data(ttl=20)
+def get_remote_status():
+    """The engine and Discord bot run on a local machine, not on Streamlit Cloud,
+    so local lock-file checks (instance_lock.is_locked) always report offline here.
+    The local bot publishes a heartbeat to a public Gist every ~60s; treat it as
+    alive only if BOTH the flag is true AND the heartbeat isn't stale (covers a
+    crash that never got to write a final "false")."""
+
+    try:
+        resp = requests.get(f"{HEARTBEAT_GIST_URL}?_={int(datetime.now().timestamp())}", timeout=5)
+        data = resp.json()
+        last = datetime.fromisoformat(data["last_heartbeat"])
+        age = (datetime.now(timezone.utc) - last).total_seconds()
+        fresh = age < HEARTBEAT_STALE_AFTER_SECONDS
+        return bool(data["engine_alive"]) and fresh, bool(data["discord_alive"]) and fresh
+    except Exception:
+        return False, False
 
 load_dotenv()
 
@@ -202,6 +225,11 @@ alpaca = get_alpaca_client()
 
 cortex_alive = is_locked("autonomous_controller")
 discord_alive = is_locked("cortex_discord")
+
+if not cortex_alive and not discord_alive:
+    # Local lock files aren't visible when running on Streamlit Cloud (the bots
+    # run on a different machine) -- fall back to the shared heartbeat instead.
+    cortex_alive, discord_alive = get_remote_status()
 
 try:
     clock = alpaca.get_clock()
