@@ -77,7 +77,7 @@ st.set_page_config(
 # Refresh the whole page automatically -- no manual click, and it's what keeps
 # the "Local Time" pill (and everything else) actually live instead of a frozen
 # snapshot from whenever the page happened to load.
-st_autorefresh(interval=30_000, key="cortex_autorefresh")
+st_autorefresh(interval=5_000, key="cortex_autorefresh")
 
 st.markdown("""
 <style>
