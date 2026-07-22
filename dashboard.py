@@ -1,6 +1,9 @@
 import json
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+MARKET_TZ = ZoneInfo("America/New_York")
 
 import plotly.graph_objects as go
 import requests
@@ -303,7 +306,7 @@ with col_refresh:
         st.cache_data.clear()
         st.rerun()
 with col_time:
-    st.markdown(f'<div style="color:var(--text-muted); padding-top:8px;">Last updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="color:var(--text-muted); padding-top:8px;">Last updated: {datetime.now(MARKET_TZ).strftime("%Y-%m-%d %H:%M:%S")} ET</div>', unsafe_allow_html=True)
 
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
@@ -338,7 +341,7 @@ with c:
     else:
         status_pill("Market", "OPEN" if market_open else "CLOSED", "good" if market_open else "warn")
 with d:
-    status_pill("Local Time", datetime.now().strftime("%H:%M:%S"), "good")
+    status_pill("Market Time", datetime.now(MARKET_TZ).strftime("%H:%M:%S") + " ET", "good")
 
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
