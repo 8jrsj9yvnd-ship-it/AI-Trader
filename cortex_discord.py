@@ -13,6 +13,10 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from instance_lock import acquire_lock, is_locked
 from cortex_context import alpaca, get_alpaca_context, ask_cortex_ollama, DASHBOARD_URL
+from stock_scanner import analyze_stock, stocks as WATCHLIST
+from cortex_learning import load_memory, learning_summary
+from market_hours import get_session
+import config
 
 # See autonomous_controller.py -- redirected stdout/stderr default to full
 # block buffering, which can hide output (including errors) from the log
@@ -55,6 +59,7 @@ conversation_history = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
 # Only one guild/channel this bot has ever been added to (verified via the
 # Discord API 2026-07-23) -- hardcoded rather than auto-detected each run so
 # a future second server doesn't silently redirect the daily post.
+GUILD_ID = 1358303268387946606
 DAILY_DASHBOARD_CHANNEL_ID = 1358303268387946609
 DAILY_DASHBOARD_POST_TIME = dtime(hour=17, minute=0, tzinfo=ZoneInfo("America/Los_Angeles"))
 
@@ -73,6 +78,16 @@ async def on_ready():
     print(f"Cortex Discord Online: {bot.user}")
     if not post_daily_dashboard_link.is_running():
         post_daily_dashboard_link.start()
+
+    # Guild-scoped sync (not global) so slash commands show up immediately
+    # instead of waiting up to an hour for Discord's global propagation.
+    try:
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} slash commands to guild {GUILD_ID}")
+    except Exception as e:
+        print(f"Slash command sync failed: {e}")
 
 
 @bot.event
@@ -108,7 +123,7 @@ async def on_message(message):
 
     except Exception as e:
         await message.channel.send(f"⚠️ Cortex error: {e}")
-@bot.command()
+@bot.hybrid_command(description="Engine/market status and account snapshot")
 async def status(ctx):
 
     engine_state = "🟢 ONLINE" if is_locked("autonomous_controller") else "🔴 OFFLINE"
@@ -147,7 +162,7 @@ async def status(ctx):
     await ctx.send("\n".join(lines))
 
 
-@bot.command()
+@bot.hybrid_command(description="Show all currently open positions")
 async def positions(ctx):
 
     try:
@@ -176,11 +191,156 @@ async def positions(ctx):
     await ctx.send("\n".join(lines))
 
 
-@bot.command()
+@bot.hybrid_command(description="Say hi to Cortex")
 async def hello(ctx):
     await ctx.send(
-        "Hello! I'm Cortex. Ask me anything, or use !status / !positions."
+        "Hello! I'm Cortex. Ask me anything in plain English, or use !help to see "
+        "the fast commands."
     )
+
+
+@bot.hybrid_command(description="Live price, RSI, and Cortex's technical score for any stock ticker")
+@discord.app_commands.describe(symbol="Stock ticker, e.g. AAPL")
+async def price(ctx, symbol: str = None):
+    if not symbol:
+        await ctx.send("Usage: `!price SYMBOL` (e.g. `!price AAPL`)")
+        return
+
+    try:
+        data = analyze_stock(symbol.upper())
+    except Exception as e:
+        await ctx.send(f"⚠️ Couldn't analyze {symbol.upper()}: {e}")
+        return
+
+    bias_emoji = {"BUY WATCH": "🟢", "NEUTRAL": "🟡", "AVOID": "🔴"}.get(data["bias"], "⚪")
+
+    lines = [
+        f"📈 **{data['symbol']}** — ${data['price']}",
+        f"{bias_emoji} Score: **{data['score']}/100** ({data['bias']})",
+        f"RSI: {data['rsi']} | Volume: {data['volume_strength']}x avg",
+        f"1D: {data['day_change']:+.2f}% | 5D: {data['five_day_change']:+.2f}% | 20D: {data['twenty_day_change']:+.2f}%",
+    ]
+    if data.get("reason"):
+        lines.append(f"_{data['reason']}_")
+
+    await ctx.send("\n".join(lines))
+
+
+@bot.hybrid_command(description="Recent closed trades, optionally filtered to one symbol")
+@discord.app_commands.describe(symbol="Optional ticker to filter by, e.g. AAPL")
+async def trades(ctx, symbol: str = None):
+    memory = load_memory()
+    completed = [t for t in memory if "profit_loss" in t]
+
+    if symbol:
+        completed = [t for t in completed if t.get("symbol", "").upper() == symbol.upper()]
+
+    completed = list(reversed(completed))[:10]
+
+    if not completed:
+        target = f" for {symbol.upper()}" if symbol else ""
+        await ctx.send(f"📉 No completed trades recorded{target}.")
+        return
+
+    header = f"📉 **RECENT TRADES{' — ' + symbol.upper() if symbol else ''}**"
+    lines = [header, ""]
+
+    for t in completed:
+        pl = t.get("profit_loss", 0)
+        arrow = "🟢" if pl >= 0 else "🔴"
+        lines.append(
+            f"{arrow} **{t.get('symbol', '?')}** {t.get('date', '')} — "
+            f"buy ${t.get('buy_price', 0):.2f} / sell ${t.get('sell_price', 0):.2f} "
+            f"→ ${pl:,.2f}"
+        )
+
+    await ctx.send("\n".join(lines))
+
+
+async def _symbol_autocomplete(interaction: discord.Interaction, current: str):
+    current = (current or "").upper()
+    matches = [s for s in WATCHLIST if s.startswith(current)][:25]
+    return [discord.app_commands.Choice(name=s, value=s) for s in matches]
+
+
+price.autocomplete("symbol")(_symbol_autocomplete)
+trades.autocomplete("symbol")(_symbol_autocomplete)
+
+
+@bot.hybrid_command(description="Win rate and total P/L across completed trades")
+async def performance(ctx):
+    await ctx.send(f"📊 **PERFORMANCE**\n{learning_summary()}")
+
+
+@bot.hybrid_command(description="Cortex's current entry/exit/risk settings")
+async def strategy(ctx):
+    lines = [
+        "⚙️ **STRATEGY SETTINGS**",
+        "",
+        f"Min entry score: **{config.MIN_ENTRY_SCORE}**/100",
+        f"Min volume strength: **{config.MIN_VOLUME_STRENGTH}x** avg",
+        f"Stop-loss: **{config.ATR_STOP_MULTIPLIER}x ATR** (fallback: flat {config.STOP_LOSS_PERCENT*100:.0f}%)",
+        f"Take-profit: **{config.TAKE_PROFIT_RATIO}:1** reward:risk",
+        f"Max open positions: **{config.MAX_OPEN_POSITIONS}**",
+        f"Max shares/trade: **{config.MAX_SHARES_PER_TRADE}**",
+        f"Risk per trade: **{config.RISK_PER_TRADE*100:.1f}%** of equity",
+        f"Max daily loss: **{config.MAX_DAILY_LOSS*100:.0f}%** (halts new entries for the day)",
+        f"Extended hours: **{'enabled' if config.ENABLE_EXTENDED_HOURS else 'disabled'}**",
+    ]
+    await ctx.send("\n".join(lines))
+
+
+@bot.hybrid_command(description="Precise market session: regular, pre-market, after-hours, or closed")
+async def session(ctx):
+    try:
+        s = get_session()
+    except Exception as e:
+        await ctx.send(f"⚠️ Couldn't determine market session: {e}")
+        return
+    await ctx.send(f"🕐 Market session: **{s}**")
+
+
+@bot.hybrid_command(description="Top-ranked watchlist stocks right now")
+async def watchlist(ctx):
+    results = []
+    for sym in WATCHLIST:
+        try:
+            results.append(analyze_stock(sym))
+        except Exception:
+            pass
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+    lines = ["🔍 **WATCHLIST — top 5 by score**", ""]
+    for s in results[:5]:
+        bias_emoji = {"BUY WATCH": "🟢", "NEUTRAL": "🟡", "AVOID": "🔴"}.get(s["bias"], "⚪")
+        lines.append(f"{bias_emoji} **{s['symbol']}** — {s['score']}/100 (${s['price']}, RSI {s['rsi']})")
+
+    await ctx.send("\n".join(lines))
+
+
+@bot.hybrid_command(description="List everything Cortex can do")
+async def help(ctx):
+    lines = [
+        "🤖 **CORTEX COMMANDS**",
+        "",
+        "Just talk to me normally for anything -- ask about a specific stock, "
+        "a past trade, why the strategy works a certain way, or general questions. "
+        "I remember the last few messages in this channel.",
+        "",
+        "**Fast commands** (instant, no AI needed):",
+        "`!status` — engine/market status + account snapshot",
+        "`!positions` — open positions",
+        "`!price SYMBOL` — live price/RSI/score for any ticker",
+        "`!trades [SYMBOL]` — recent closed trades, optionally filtered",
+        "`!performance` — win rate / total P&L",
+        "`!strategy` — current entry/exit/risk settings",
+        "`!session` — precise market session (regular/pre/after/closed)",
+        "`!watchlist` — top-ranked watchlist stocks right now",
+        "`!join` / `!leave` / `!say <text>` — voice channel controls",
+        "",
+        f"📊 Dashboard: {DASHBOARD_URL}",
+    ]
+    await ctx.send("\n".join(lines))
 
 
 class VoiceSession:
@@ -247,7 +407,7 @@ async def teardown_session(session):
         pass
 
 
-@bot.command()
+@bot.hybrid_command(description="Join your current voice channel so Cortex can speak replies out loud")
 async def join(ctx):
     if ctx.author.voice is None or ctx.author.voice.channel is None:
         await ctx.send("You need to be in a voice channel first.")
@@ -273,7 +433,8 @@ async def join(ctx):
     )
 
 
-@bot.command()
+@bot.hybrid_command(description="Have Cortex speak text out loud in the voice channel it's joined")
+@discord.app_commands.describe(text="What Cortex should say")
 async def say(ctx, *, text: str):
     session = voice_sessions.get(ctx.guild.id)
     if session is None:
@@ -283,7 +444,7 @@ async def say(ctx, *, text: str):
     await speak_in_session(session, text)
 
 
-@bot.command()
+@bot.hybrid_command(description="Leave the current voice channel")
 async def leave(ctx):
     session = voice_sessions.pop(ctx.guild.id, None)
     if session is None:
