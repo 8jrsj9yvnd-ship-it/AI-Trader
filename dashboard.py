@@ -9,7 +9,6 @@ LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetPortfolioHistoryRequest
@@ -73,11 +72,6 @@ st.set_page_config(
     page_icon=f"data:image/svg+xml;utf8,{urllib.parse.quote(_FAVICON_SVG)}",
     layout="wide"
 )
-
-# Refresh the whole page automatically -- no manual click, and it's what keeps
-# the "Local Time" pill (and everything else) actually live instead of a frozen
-# snapshot from whenever the page happened to load.
-st_autorefresh(interval=5_000, key="cortex_autorefresh")
 
 st.markdown("""
 <style>
@@ -348,198 +342,256 @@ st.markdown('<div class="cx-caption">Autonomous Market Intelligence &amp; Tradin
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
 
-# ---------- SYSTEM STATUS ----------
-
 alpaca = get_alpaca_client()
 
-cortex_alive = is_locked("autonomous_controller")
-discord_alive = is_locked("cortex_discord")
 
-if not cortex_alive and not discord_alive:
-    # Local lock files aren't visible when running on Streamlit Cloud (the bots
-    # run on a different machine) -- fall back to the shared heartbeat instead.
-    cortex_alive, discord_alive = get_remote_status()
+# ---------- SYSTEM STATUS (ticks every second, own fragment so nothing
+# else on the page reruns/resets just to keep the clock live) ----------
 
-try:
-    clock = alpaca.get_clock()
-    market_open = clock.is_open
-except Exception:
-    market_open = None
+@st.fragment(run_every=1)
+def render_status():
+    cortex_alive = is_locked("autonomous_controller")
+    discord_alive = is_locked("cortex_discord")
 
-a, b, c, d = st.columns(4)
+    if not cortex_alive and not discord_alive:
+        # Local lock files aren't visible when running on Streamlit Cloud (the bots
+        # run on a different machine) -- fall back to the shared heartbeat instead.
+        cortex_alive, discord_alive = get_remote_status()
 
-with a:
-    status_pill("Cortex Engine", "ONLINE" if cortex_alive else "OFFLINE", "good" if cortex_alive else "bad")
-with b:
-    status_pill("Discord Bot", "ONLINE" if discord_alive else "OFFLINE", "good" if discord_alive else "bad")
-with c:
-    if market_open is None:
-        status_pill("Market", "UNKNOWN", "warn")
-    else:
-        status_pill("Market", "OPEN" if market_open else "CLOSED", "good" if market_open else "warn")
-with d:
-    status_pill("Local Time", datetime.now(LOCAL_TZ).strftime("%H:%M:%S %Z"), "good")
-
-st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
-
-
-# ---------- ACCOUNT ----------
-
-st.markdown('<div class="cx-section-label">💼 Account</div>', unsafe_allow_html=True)
-
-try:
-    account = alpaca.get_account()
-    equity = float(account.equity)
-    last_equity = float(account.last_equity)
-    day_pl = equity - last_equity
-    day_pl_pct = (day_pl / last_equity * 100) if last_equity else 0
-    delta_class = "cx-hero-delta-good" if day_pl >= 0 else "cx-hero-delta-bad"
-    arrow = "▲" if day_pl >= 0 else "▼"
-
-    ytd_pct = get_ytd_return(equity)
-    ytd_line = ""
-    if ytd_pct is not None:
-        ytd_class = "cx-hero-delta-good" if ytd_pct >= 0 else "cx-hero-delta-bad"
-        ytd_arrow = "▲" if ytd_pct >= 0 else "▼"
-        ytd_line = f'<div class="{ytd_class}" style="margin-top:2px;">{ytd_arrow} {ytd_pct:+.2f}% YTD</div>'
-
-    hero_col, rest_col = st.columns([1.3, 2])
-
-    with hero_col:
-        st.markdown(f"""
-        <div class="cx-hero-wrap">
-            <div class="cx-hero-label">Equity</div>
-            <div class="cx-hero-value">${equity:,.2f}</div>
-            <div class="{delta_class}">{arrow} ${day_pl:,.2f} ({day_pl_pct:+.2f}%) today</div>
-            {ytd_line}
-        </div>
-        """, unsafe_allow_html=True)
-
-    with rest_col:
-        b, c = st.columns(2)
-        b.metric("Cash", f"${float(account.cash):,.2f}")
-        c.metric("Buying Power", f"${float(account.buying_power):,.2f}")
-
-    st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
     try:
-        render_equity_chart(get_equity_curve())
-    except Exception as e:
-        st.info(f"Equity chart unavailable: {e}")
+        clock = alpaca.get_clock()
+        market_open = clock.is_open
+    except Exception:
+        market_open = None
 
-except Exception as e:
-    st.error(f"Unable to load account: {e}")
+    a, b, c, d = st.columns(4)
+
+    with a:
+        status_pill("Cortex Engine", "ONLINE" if cortex_alive else "OFFLINE", "good" if cortex_alive else "bad")
+    with b:
+        status_pill("Discord Bot", "ONLINE" if discord_alive else "OFFLINE", "good" if discord_alive else "bad")
+    with c:
+        if market_open is None:
+            status_pill("Market", "UNKNOWN", "warn")
+        else:
+            status_pill("Market", "OPEN" if market_open else "CLOSED", "good" if market_open else "warn")
+    with d:
+        status_pill("Local Time", datetime.now(LOCAL_TZ).strftime("%H:%M:%S %Z"), "good")
+
+
+render_status()
 
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
 
-# ---------- POSITIONS ----------
+# ---------- ACCOUNT + POSITIONS (share equity/last_equity for the risk
+# gauges, so kept in one fragment -- refreshes every 5s in place) ----------
 
-st.markdown('<div class="cx-section-label">📊 Open Positions</div>', unsafe_allow_html=True)
+@st.fragment(run_every=5)
+def render_account_and_positions():
 
-try:
-    positions = alpaca.get_all_positions()
+    st.markdown('<div class="cx-section-label">💼 Account</div>', unsafe_allow_html=True)
 
-    if not positions:
-        st.info("No open positions.")
-    else:
-        for p in positions:
-            entry = float(p.avg_entry_price)
-            current = float(p.current_price)
-            pl_pct = (current - entry) / entry * 100
-            target = get_target(p.symbol)
+    equity = last_equity = None
 
-            card_class = "cx-card cx-card-good" if pl_pct >= 0 else "cx-card cx-card-bad"
-            delta_class = "cx-delta-good" if pl_pct >= 0 else "cx-delta-bad"
-            arrow = "▲" if pl_pct >= 0 else "▼"
+    try:
+        account = alpaca.get_account()
+        equity = float(account.equity)
+        last_equity = float(account.last_equity)
+        day_pl = equity - last_equity
+        day_pl_pct = (day_pl / last_equity * 100) if last_equity else 0
+        delta_class = "cx-hero-delta-good" if day_pl >= 0 else "cx-hero-delta-bad"
+        arrow = "▲" if day_pl >= 0 else "▼"
 
-            target_line = ""
-            if target:
-                target_line = f'<div class="cx-card-row">Stop: <b>${target["stop"]:.2f}</b> &nbsp;&nbsp; Target: <b>${target["target"]:.2f}</b></div>'
+        ytd_pct = get_ytd_return(equity)
+        ytd_line = ""
+        if ytd_pct is not None:
+            ytd_class = "cx-hero-delta-good" if ytd_pct >= 0 else "cx-hero-delta-bad"
+            ytd_arrow = "▲" if ytd_pct >= 0 else "▼"
+            ytd_line = f'<div class="{ytd_class}" style="margin-top:2px;">{ytd_arrow} {ytd_pct:+.2f}% YTD</div>'
+
+        hero_col, rest_col = st.columns([1.3, 2])
+
+        with hero_col:
+            st.markdown(f"""
+            <div class="cx-hero-wrap">
+                <div class="cx-hero-label">Equity</div>
+                <div class="cx-hero-value">${equity:,.2f}</div>
+                <div class="{delta_class}">{arrow} ${day_pl:,.2f} ({day_pl_pct:+.2f}%) today</div>
+                {ytd_line}
+            </div>
+            """, unsafe_allow_html=True)
+
+        with rest_col:
+            b, c = st.columns(2)
+            b.metric("Cash", f"${float(account.cash):,.2f}")
+            c.metric("Buying Power", f"${float(account.buying_power):,.2f}")
+
+        st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+        try:
+            render_equity_chart(get_equity_curve())
+        except Exception as e:
+            st.info(f"Equity chart unavailable: {e}")
+
+    except Exception as e:
+        st.error(f"Unable to load account: {e}")
+
+    st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
+
+    st.markdown('<div class="cx-section-label">📊 Open Positions</div>', unsafe_allow_html=True)
+
+    try:
+        positions = alpaca.get_all_positions()
+
+        # Risk usage against the two hard caps that actually gate new trades
+        # in autonomous_controller.py: today's drawdown vs MAX_DAILY_LOSS, and
+        # open position count vs MAX_OPEN_POSITIONS.
+        if equity is not None and last_equity is not None:
+            daily_loss = max(0, last_equity - equity)
+            daily_loss_limit = last_equity * config.MAX_DAILY_LOSS
+            loss_pct = min(daily_loss / daily_loss_limit, 1.0) * 100 if daily_loss_limit else 0
+            loss_color = "#d03b3b" if loss_pct >= 100 else ("#fab219" if loss_pct >= 70 else "#0ca30c")
+
+            pos_count = len(positions)
+            pos_pct = min(pos_count / config.MAX_OPEN_POSITIONS, 1.0) * 100 if config.MAX_OPEN_POSITIONS else 0
+            pos_color = "#d03b3b" if pos_pct >= 100 else ("#fab219" if pos_pct >= 70 else "#0ca30c")
+
+            r1, r2 = st.columns(2)
+            with r1:
+                st.markdown(f"""
+                <div class="cx-card">
+                    <div class="cx-meter-label"><span>Daily Loss Used</span><span>${daily_loss:,.2f} / ${daily_loss_limit:,.2f}</span></div>
+                    <div class="cx-meter-track" style="background:rgba(255,255,255,0.06);"><div class="cx-meter-fill" style="width:{loss_pct:.0f}%; background:{loss_color};"></div></div>
+                </div>
+                """, unsafe_allow_html=True)
+            with r2:
+                st.markdown(f"""
+                <div class="cx-card">
+                    <div class="cx-meter-label"><span>Open Positions</span><span>{pos_count} / {config.MAX_OPEN_POSITIONS}</span></div>
+                    <div class="cx-meter-track" style="background:rgba(255,255,255,0.06);"><div class="cx-meter-fill" style="width:{pos_pct:.0f}%; background:{pos_color};"></div></div>
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+
+        if not positions:
+            st.info("No open positions.")
+        else:
+            for p in positions:
+                entry = float(p.avg_entry_price)
+                current = float(p.current_price)
+                pl_pct = (current - entry) / entry * 100
+                target = get_target(p.symbol)
+
+                card_class = "cx-card cx-card-good" if pl_pct >= 0 else "cx-card cx-card-bad"
+                delta_class = "cx-delta-good" if pl_pct >= 0 else "cx-delta-bad"
+                arrow = "▲" if pl_pct >= 0 else "▼"
+
+                target_line = ""
+                if target:
+                    target_line = f'<div class="cx-card-row">Stop: <b>${target["stop"]:.2f}</b> &nbsp;&nbsp; Target: <b>${target["target"]:.2f}</b></div>'
+
+                st.markdown(f"""
+                <div class="{card_class}">
+                    <div class="cx-card-title">{p.symbol}</div>
+                    <div class="cx-card-row">Qty: <b>{p.qty}</b> &nbsp;&nbsp; Entry: <b>${entry:.2f}</b> &nbsp;&nbsp; Current: <b>${current:.2f}</b></div>
+                    <div class="cx-card-row">Unrealized P/L: <span class="{delta_class}">{arrow} ${float(p.unrealized_pl):,.2f} ({pl_pct:+.2f}%)</span></div>
+                    {target_line}
+                </div>
+                """, unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"Unable to load positions: {e}")
+
+
+render_account_and_positions()
+
+st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
+
+
+# ---------- PERFORMANCE / TRADE HISTORY (changes only when a trade closes
+# -- 30s is plenty, no need to hammer the JSON file every second) ----------
+
+@st.fragment(run_every=30)
+def render_performance():
+
+    st.markdown('<div class="cx-section-label">📈 Performance</div>', unsafe_allow_html=True)
+
+    memory = load_json("cortex_memory.json")
+    completed = [t for t in memory if "profit_loss" in t]
+
+    if completed:
+        wins = sum(1 for t in completed if t.get("profit_loss", 0) > 0)
+        total = len(completed)
+        win_rate = wins / total * 100
+        total_pl = sum(t.get("profit_loss", 0) for t in completed)
+
+        a, b, c = st.columns(3)
+        a.metric("Completed Trades", total)
+        b.metric("Win Rate", f"{win_rate:.1f}%")
+        c.metric("Total P/L", f"${total_pl:,.2f}")
+
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="cx-section-label">Recent Trades</div>', unsafe_allow_html=True)
+
+        for t in reversed(completed[-10:]):
+            pl = t.get("profit_loss", 0)
+            card_class = "cx-card cx-card-good" if pl >= 0 else "cx-card cx-card-bad"
+            delta_class = "cx-delta-good" if pl >= 0 else "cx-delta-bad"
+            arrow = "▲" if pl >= 0 else "▼"
 
             st.markdown(f"""
             <div class="{card_class}">
-                <div class="cx-card-title">{p.symbol}</div>
-                <div class="cx-card-row">Qty: <b>{p.qty}</b> &nbsp;&nbsp; Entry: <b>${entry:.2f}</b> &nbsp;&nbsp; Current: <b>${current:.2f}</b></div>
-                <div class="cx-card-row">Unrealized P/L: <span class="{delta_class}">{arrow} ${float(p.unrealized_pl):,.2f} ({pl_pct:+.2f}%)</span></div>
-                {target_line}
+                <div class="cx-card-row"><b>{t.get('symbol', '?')}</b> &nbsp; <span class="cx-muted">{t.get('date', '')}</span></div>
+                <div class="cx-card-row">Buy: <b>${t.get('buy_price', 0):.2f}</b> &nbsp; Sell: <b>${t.get('sell_price', 0):.2f}</b> &nbsp; P/L: <span class="{delta_class}">{arrow} ${pl:,.2f}</span></div>
+                <div class="cx-muted">{t.get('reason', '')}</div>
             </div>
             """, unsafe_allow_html=True)
+    else:
+        st.info("No completed trades recorded yet.")
 
-except Exception as e:
-    st.error(f"Unable to load positions: {e}")
+
+render_performance()
 
 st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
 
 
-# ---------- PERFORMANCE / TRADE HISTORY ----------
+# ---------- SCANNER (underlying data is cached for 5min anyway --
+# poll on a shorter cycle so a fresh cache result shows up promptly,
+# without re-scanning the watchlist on every tick) ----------
 
-st.markdown('<div class="cx-section-label">📈 Performance</div>', unsafe_allow_html=True)
+@st.fragment(run_every=60)
+def render_scanner():
 
-memory = load_json("cortex_memory.json")
-completed = [t for t in memory if "profit_loss" in t]
+    st.markdown('<div class="cx-section-label">🔍 Market Scanner &mdash; top 5, refreshes every 5 min</div>', unsafe_allow_html=True)
 
-if completed:
-    wins = sum(1 for t in completed if t.get("profit_loss", 0) > 0)
-    total = len(completed)
-    win_rate = wins / total * 100
-    total_pl = sum(t.get("profit_loss", 0) for t in completed)
+    try:
+        top = get_scanner_results()[:5]
 
-    a, b, c = st.columns(3)
-    a.metric("Completed Trades", total)
-    b.metric("Win Rate", f"{win_rate:.1f}%")
-    c.metric("Total P/L", f"${total_pl:,.2f}")
+        cols = st.columns(len(top)) if top else []
+        for col, s in zip(cols, top):
+            with col:
+                score = s["score"]
+                if score >= 75:
+                    meter_color, track_color, badge_class = "#0ca30c", "rgba(12,163,12,0.15)", "cx-badge-good"
+                elif score >= 50:
+                    meter_color, track_color, badge_class = "#fab219", "rgba(250,178,25,0.15)", "cx-badge-warn"
+                else:
+                    meter_color, track_color, badge_class = "#898781", "rgba(137,135,129,0.15)", "cx-badge-muted"
 
-    st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="cx-section-label">Recent Trades</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="cx-card">
+                    <div class="cx-card-title">{s['symbol']}</div>
+                    <div class="cx-card-row">Price: <b>${s['price']}</b> &nbsp; RSI: <b>{s['rsi']}</b></div>
+                    <div class="cx-card-row"><span class="{badge_class}">{s['bias']}</span></div>
+                    <div class="cx-meter-label"><span>Score</span><span>{score}/100</span></div>
+                    <div class="cx-meter-track" style="background:{track_color};"><div class="cx-meter-fill" style="width:{score}%; background:{meter_color};"></div></div>
+                </div>
+                """, unsafe_allow_html=True)
 
-    for t in reversed(completed[-10:]):
-        pl = t.get("profit_loss", 0)
-        card_class = "cx-card cx-card-good" if pl >= 0 else "cx-card cx-card-bad"
-        delta_class = "cx-delta-good" if pl >= 0 else "cx-delta-bad"
-        arrow = "▲" if pl >= 0 else "▼"
-
-        st.markdown(f"""
-        <div class="{card_class}">
-            <div class="cx-card-row"><b>{t.get('symbol', '?')}</b> &nbsp; <span class="cx-muted">{t.get('date', '')}</span></div>
-            <div class="cx-card-row">Buy: <b>${t.get('buy_price', 0):.2f}</b> &nbsp; Sell: <b>${t.get('sell_price', 0):.2f}</b> &nbsp; P/L: <span class="{delta_class}">{arrow} ${pl:,.2f}</span></div>
-            <div class="cx-muted">{t.get('reason', '')}</div>
-        </div>
-        """, unsafe_allow_html=True)
-else:
-    st.info("No completed trades recorded yet.")
-
-st.markdown('<hr class="cx-divider">', unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Scanner unavailable: {e}")
 
 
-# ---------- SCANNER ----------
-
-st.markdown('<div class="cx-section-label">🔍 Market Scanner &mdash; top 5, refreshes every 5 min</div>', unsafe_allow_html=True)
-
-try:
-    top = get_scanner_results()[:5]
-
-    cols = st.columns(len(top)) if top else []
-    for col, s in zip(cols, top):
-        with col:
-            score = s["score"]
-            if score >= 75:
-                meter_color, track_color, badge_class = "#0ca30c", "rgba(12,163,12,0.15)", "cx-badge-good"
-            elif score >= 50:
-                meter_color, track_color, badge_class = "#fab219", "rgba(250,178,25,0.15)", "cx-badge-warn"
-            else:
-                meter_color, track_color, badge_class = "#898781", "rgba(137,135,129,0.15)", "cx-badge-muted"
-
-            st.markdown(f"""
-            <div class="cx-card">
-                <div class="cx-card-title">{s['symbol']}</div>
-                <div class="cx-card-row">Price: <b>${s['price']}</b> &nbsp; RSI: <b>{s['rsi']}</b></div>
-                <div class="cx-card-row"><span class="{badge_class}">{s['bias']}</span></div>
-                <div class="cx-meter-label"><span>Score</span><span>{score}/100</span></div>
-                <div class="cx-meter-track" style="background:{track_color};"><div class="cx-meter-fill" style="width:{score}%; background:{meter_color};"></div></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-except Exception as e:
-    st.error(f"Scanner unavailable: {e}")
+render_scanner()
 
 st.markdown('<div class="cx-caption" style="margin-top:1.5rem;">Cortex AI &mdash; Local Intelligence System</div>', unsafe_allow_html=True)
