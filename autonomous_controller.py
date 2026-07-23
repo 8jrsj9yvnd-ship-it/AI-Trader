@@ -23,13 +23,6 @@ from cortex_learning import log_trade as log_learning
 import sys
 from datetime import datetime
 
-# stdout/stderr are redirected to log files when launched by start_cortex.ps1,
-# which makes Python fall back to full block-buffering instead of line
-# buffering -- prints (including error output) can sit invisible in the
-# buffer for a long time instead of showing up in the log promptly.
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
 
 load_dotenv()
 
@@ -43,6 +36,21 @@ if not acquire_lock("autonomous_controller"):
     print("Cortex is already running. Exiting.")
 
     sys.exit(0)
+
+
+# Only the winning instance reaches this point. Own the log files directly,
+# in append mode, from here on -- rather than relying on the launcher's
+# process-level stdout/stderr redirection (start_cortex.ps1's Start-Process
+# -RedirectStandardOutput), which opens/truncates the target file the moment
+# a NEW process launches, even one that's about to lose the lock check above
+# and exit immediately. A scheduled-task relaunch racing the real running
+# instance could truncate this process's log file out from under it that
+# way; a redundant launch now never touches these files at all, since it
+# exits before reaching this line. Line-buffered so output shows up promptly
+# instead of sitting in a block buffer.
+_LOG_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.stdout = open(os.path.join(_LOG_DIR, "autonomous_controller.out.log"), "a", buffering=1)
+sys.stderr = open(os.path.join(_LOG_DIR, "autonomous_controller.err.log"), "a", buffering=1)
 
 
 

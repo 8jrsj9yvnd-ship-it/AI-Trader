@@ -18,12 +18,6 @@ from cortex_learning import load_memory, learning_summary
 from market_hours import get_session
 import config
 
-# See autonomous_controller.py -- redirected stdout/stderr default to full
-# block buffering, which can hide output (including errors) from the log
-# files for a long time.
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
 load_dotenv()
 
 # NOTE: Discord requires E2EE (the DAVE protocol) on every voice call as of
@@ -35,6 +29,16 @@ load_dotenv()
 if not acquire_lock("cortex_discord"):
     print("Cortex Discord is already running. Exiting.")
     sys.exit(0)
+
+# Only the winning instance reaches this point. Own the log files directly,
+# in append mode, from here on -- see the matching comment in
+# autonomous_controller.py for why (process-level -RedirectStandardOutput
+# truncates the target file the instant a new process launches, even one
+# that's about to lose the lock check above and exit immediately, which can
+# corrupt the real running instance's log out from under it).
+_LOG_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.stdout = open(os.path.join(_LOG_DIR, "cortex_discord.out.log"), "a", buffering=1)
+sys.stderr = open(os.path.join(_LOG_DIR, "cortex_discord.err.log"), "a", buffering=1)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 

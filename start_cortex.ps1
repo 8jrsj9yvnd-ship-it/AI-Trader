@@ -40,11 +40,16 @@ Where-Object {
 if (-not $cortex) {
 
 
+    # No -RedirectStandardOutput/-RedirectStandardError here on purpose --
+    # the script now opens its own log files in append mode itself, after
+    # confirming it holds the instance lock. Redirecting at this level would
+    # open (and truncate) the shared log file the instant THIS process
+    # launches, even in the case where it turns out another instance is
+    # already running and this one just exits -- corrupting that other,
+    # actually-running instance's log out from under it.
     Start-Process $python `
     -WorkingDirectory "D:\AI-Trader" `
-    -ArgumentList "D:\AI-Trader\autonomous_controller.py" `
-    -RedirectStandardOutput "D:\AI-Trader\autonomous_controller.out.log" `
-    -RedirectStandardError "D:\AI-Trader\autonomous_controller.err.log"
+    -ArgumentList "D:\AI-Trader\autonomous_controller.py"
 
 
     Write-Output "Cortex started"
@@ -74,11 +79,11 @@ Where-Object {
 if (-not $discord) {
 
 
+    # Same reasoning as the Cortex engine launch above -- let the script own
+    # its own log files in append mode after it holds the lock.
     Start-Process $python `
     -WorkingDirectory "D:\AI-Trader" `
-    -ArgumentList "D:\AI-Trader\cortex_discord.py" `
-    -RedirectStandardOutput "D:\AI-Trader\cortex_discord.out.log" `
-    -RedirectStandardError "D:\AI-Trader\cortex_discord.err.log"
+    -ArgumentList "D:\AI-Trader\cortex_discord.py"
 
 
     Write-Output "Discord started"
