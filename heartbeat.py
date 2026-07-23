@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -30,3 +31,8 @@ def write_heartbeat(engine_alive, discord_alive):
         )
     except Exception as e:
         print(f"[heartbeat] failed to publish: {e}")
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass

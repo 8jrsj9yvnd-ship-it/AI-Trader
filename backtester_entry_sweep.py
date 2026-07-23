@@ -222,11 +222,11 @@ for threshold in THRESHOLDS:
 
     print(f"threshold={threshold:3d}  avg return {avg_return:+6.2f}%   total trades {total_trades:4d}   avg win rate {avg_win_rate:5.1f}%   profitable {profitable}/{len(rows)}")
 
-print("\n===================== REGIME FILTER ON/OFF (threshold=75, live default) =====================")
+print(f"\n===================== REGIME FILTER ON/OFF (threshold={config.MIN_ENTRY_SCORE}, live default) =====================")
 for require_regime in [False, True]:
     rows = []
     for symbol, data in all_data.items():
-        rows.append(run(data, 75, regime, require_good_regime=require_regime))
+        rows.append(run(data, config.MIN_ENTRY_SCORE, regime, require_good_regime=require_regime))
 
     avg_return = sum(r["return_pct"] for r in rows) / len(rows)
     total_trades = sum(r["trades"] for r in rows)

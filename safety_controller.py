@@ -12,9 +12,6 @@ client = TradingClient(
     paper=True
 )
 
-MAX_OPEN_ORDERS = 3
-
-
 def check_safety(symbol):
 
     positions = client.get_all_positions()
@@ -40,7 +37,11 @@ def check_safety(symbol):
         return False, "Maximum positions reached"
 
 
-    if len(open_orders) >= MAX_OPEN_ORDERS:
+    # Bounded by MAX_OPEN_POSITIONS (not a separate hardcoded cap) so this
+    # can never throttle entries below the position count that was actually
+    # walk-forward validated -- a pending order becomes a position once
+    # filled, so the ceiling that matters is the same one either way.
+    if len(open_orders) >= config.MAX_OPEN_POSITIONS:
         return False, "Too many open orders"
 
 

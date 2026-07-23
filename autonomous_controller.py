@@ -1,6 +1,7 @@
 from daily_risk import check_daily_loss
 from trade_logger import log_trade as record_trade
 from market_filter import market_is_good
+from market_hours import get_session
 from stock_scanner import analyze_stock, stocks
 from risk_manager import calculate_position_size
 from safety_controller import check_safety
@@ -11,18 +12,23 @@ from heartbeat import write_heartbeat
 import config
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from dotenv import load_dotenv
 
-import ollama
-import json
 import os
 import time
-from cortex_learning import log_trade as log_learning, learning_summary, get_learning_context
+from cortex_learning import log_trade as log_learning
 import sys
 from datetime import datetime
+
+# stdout/stderr are redirected to log files when launched by start_cortex.ps1,
+# which makes Python fall back to full block-buffering instead of line
+# buffering -- prints (including error output) can sit invisible in the
+# buffer for a long time instead of showing up in the log promptly.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 
 load_dotenv()
@@ -87,20 +93,6 @@ def system_check():
         )
 
 
-    try:
-
-        ollama.list()
-
-        print("Ollama: ONLINE")
-
-    except Exception as e:
-
-        print(
-            "Ollama ERROR:",
-            e
-        )
-
-
 
 def countdown():
 
@@ -130,69 +122,6 @@ def countdown():
 
 
 
-def ask_cortex(candidates):
-
-    learning = get_learning_context()
-
-    prompt = f"""
-
-You are Cortex trading AI.
-
-Previous trading performance:
-
-{learning}
-
-Use this history to improve future decisions.
-
-Rank these stocks.
-
-Only choose BUY if:
-
-- Score above 80
-- RSI is healthy
-- Trend is positive
-- Risk is acceptable
-
-
-Candidates:
-
-{json.dumps(candidates,indent=2)}
-
-
-Return JSON only:
-
-{{
-"symbol":"TICKER",
-"signal":"BUY or HOLD",
-"confidence":0-100,
-"reason":"reason",
-"risk":"LOW MEDIUM HIGH"
-}}
-
-"""
-
-    response = ollama.chat(
-
-        model="hermes3:latest",
-
-        format="json",
-
-        messages=[
-            {
-                "role":"user",
-                "content":prompt
-            }
-        ]
-
-    )
-
-
-    return json.loads(
-        response["message"]["content"]
-    )
-
-
-
 def show_positions():
 
     positions = alpaca.get_all_positions()
@@ -219,7 +148,7 @@ def show_positions():
 
 
 
-def run_cycle():
+def run_cycle(session="REGULAR"):
 
     global scan_count
 
@@ -228,7 +157,7 @@ def run_cycle():
 
     print("\n")
     print("="*40)
-    print("CORTEX SCAN #",scan_count)
+    print("CORTEX SCAN #",scan_count,f"[{session}]")
     print(datetime.now())
     print("="*40)
 
@@ -272,8 +201,6 @@ def run_cycle():
 
             data = analyze_stock(symbol)
 
-            data["score"] = data["score"]
-
             results.append(data)
 
 
@@ -294,13 +221,9 @@ def run_cycle():
     )
 
 
-    top = ranked[:3]
-
-
     print("\nTOP PICKS")
 
-
-    for s in top:
+    for s in ranked[:5]:
 
         print(
             s["symbol"],
@@ -313,187 +236,138 @@ def run_cycle():
         )
 
 
-
-    decision = ask_cortex(top)
-
-
-    print("\nCORTEX DECISION")
-
-    print(
-        json.dumps(
-            decision,
-            indent=2
-        )
-    )
-
-
-
-    if decision["signal"] != "BUY":
-        return
-
-
-    if decision["confidence"] < config.MIN_CONFIDENCE:
-        return
-
-
-
-    symbol = decision["symbol"]
-
-
-    positions = [
-
-        p.symbol
-
-        for p in alpaca.get_all_positions()
-
+    # Entry criteria here must match backtester_entry_sweep.py's run() exactly
+    # (score >= MIN_ENTRY_SCORE, rsi <= 75) plus the separately-validated
+    # volume_strength gate -- these thresholds are the actual walk-forward-
+    # backtested edge documented in config.py. Every candidate that clears
+    # them gets evaluated for entry this cycle, not just a single top pick,
+    # since the portfolio-level backtest showed returns improving monotonically
+    # as concurrent positions rose toward MAX_OPEN_POSITIONS.
+    candidates = [
+        s for s in ranked
+        if s["score"] >= config.MIN_ENTRY_SCORE
+        and s["rsi"] <= 75
+        and s["volume_strength"] >= config.MIN_VOLUME_STRENGTH
     ]
 
+    if not candidates:
+        print("\nNo candidates meet entry criteria this cycle")
+        return
+
+    print(f"\n{len(candidates)} candidate(s) meet entry criteria")
+
+    entries = 0
+
+    for selected in candidates:
+
+        if enter_position(selected, session):
+            entries += 1
+
+    print(f"\n{entries} order(s) submitted this cycle")
+
+
+def enter_position(selected, session):
+    """Attempt to open a position in `selected` (a scored candidate dict from
+    analyze_stock). Returns True if an order was submitted."""
+
+    symbol = selected["symbol"]
+
+    positions = [
+        p.symbol
+        for p in alpaca.get_all_positions()
+    ]
 
     if symbol in positions:
+        print(symbol, "-- already holding")
+        return False
 
-        print(
-            "Already holding",
-            symbol
-        )
+    allowed, reason = check_safety(symbol)
 
-        return
-
-
-
-    selected = next(
-
-        x for x in top
-
-        if x["symbol"] == symbol
-
-    )
-
-
-    if selected["rsi"] > 75:
-
-        print(
-            "SKIPPING RSI TOO HIGH"
-        )
-
-        return
-    if selected["score"] < config.MIN_ENTRY_SCORE:
-
-        print(
-            "SKIPPING SCORE TOO LOW"
-        )
-
-        return
-
-
-    if selected["volume_strength"] < config.MIN_VOLUME_STRENGTH:
-
-        print(
-            "SKIPPING WEAK VOLUME"
-        )
-
-        return
-
-
-
-    allowed,reason = check_safety(symbol)
-
-
-    print("\nSAFETY:")
-    print(reason)
-
+    print(f"\n{symbol} SAFETY:", reason)
 
     if not allowed:
-        return
-
-
+        return False
 
     account = alpaca.get_account()
 
-
-    price = float(
-        selected["price"]
-    )
-
+    price = float(selected["price"])
 
     sizing = calculate_position_size(
-
         float(account.equity),
-
         price,
-
         atr=selected.get("atr")
-
     )
-
 
     shares = min(
-
         sizing["shares"],
-
         config.MAX_SHARES_PER_TRADE
-
     )
-
 
     if shares <= 0:
-        return
+        return False
 
+    if session == "REGULAR":
 
-
-    order = MarketOrderRequest(
-
-        symbol=symbol,
-
-        qty=shares,
-
-        side=OrderSide.BUY,
-
-        time_in_force=TimeInForce.DAY
-
-    )
-
-
-    result = alpaca.submit_order(order)
-
-    if result:
-        log_learning(
-            symbol,
-            float(result.filled_avg_price) if result.filled_avg_price else 0,
-            0,
-            0,
-            decision["reason"]
+        order = MarketOrderRequest(
+            symbol=symbol,
+            qty=shares,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY
         )
 
-        save_target(
-            symbol,
-            sizing["stop_loss"],
-            sizing["take_profit"]
+    else:
+
+        # Alpaca rejects market orders outside regular hours -- use a
+        # marketable limit instead, flagged extended_hours=True.
+        limit_price = round(
+            price * (1 + config.EXTENDED_HOURS_LIMIT_BUFFER),
+            2
         )
 
+        order = LimitOrderRequest(
+            symbol=symbol,
+            qty=shares,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+            limit_price=limit_price,
+            extended_hours=True
+        )
 
-    print(
-        "ORDER SENT:",
-        result.id
+    try:
+        result = alpaca.submit_order(order)
+    except Exception as e:
+        print(symbol, "BUY BLOCKED:", e)
+        return False
+
+    reason = selected.get("reason", "")
+
+    log_learning(
+        symbol,
+        float(result.filled_avg_price) if result.filled_avg_price else 0,
+        0,
+        0,
+        reason
     )
 
+    save_target(
+        symbol,
+        sizing["stop_loss"],
+        sizing["take_profit"]
+    )
+
+    print("ORDER SENT:", symbol, result.id)
 
     record_trade({
-
-        "symbol":symbol,
-
-        "shares":shares,
-
-        "entry":price,
-
-        "confidence":decision["confidence"],
-
-        "reason":decision["reason"],
-
-        "order_id":str(result.id),
-
-        "status":"OPEN"
-
+        "symbol": symbol,
+        "shares": shares,
+        "entry": price,
+        "confidence": selected["score"],
+        "reason": reason,
+        "order_id": str(result.id),
+        "status": "OPEN"
     })
+
+    return True
 
 
 
@@ -526,21 +400,25 @@ while True:
             write_heartbeat(True, is_locked("cortex_discord"))
             _last_heartbeat = now
 
-        clock = alpaca.get_clock()
+        session = get_session()
+
+        tradeable = (
+            session == "REGULAR"
+            or (config.ENABLE_EXTENDED_HOURS and session in ("PRE_MARKET", "AFTER_HOURS"))
+        )
+
+        if tradeable:
 
 
-        if clock.is_open:
+            monitor_positions(session)
 
-
-            monitor_positions()
-
-            run_cycle()
+            run_cycle(session)
 
             show_positions()
 
 
             print(
-                "\nCortex alive. Next scan in 60 seconds..."
+                f"\nCortex alive [{session}]. Next scan in 60 seconds..."
             )
 
 
