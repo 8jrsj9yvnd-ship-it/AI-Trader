@@ -2,14 +2,23 @@ import asyncio
 import os
 import sys
 import tempfile
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import time as dtime
+from zoneinfo import ZoneInfo
 
 import discord
 import pyttsx3
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from instance_lock import acquire_lock, is_locked
-from cortex_context import alpaca, get_alpaca_context, ask_cortex_ollama
+from cortex_context import alpaca, get_alpaca_context, ask_cortex_ollama, DASHBOARD_URL
+
+# See autonomous_controller.py -- redirected stdout/stderr default to full
+# block buffering, which can hide output (including errors) from the log
+# files for a long time.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 load_dotenv()
 
@@ -37,10 +46,33 @@ bot = commands.Bot(
 voice_sessions = {}  # guild_id -> VoiceSession
 tts_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cortex-tts")
 
+# Per-channel short-term conversation memory, in-memory only (cleared on
+# restart -- not persisted to disk). Capped so the prompt sent to Ollama
+# doesn't grow unbounded over a long-running conversation.
+HISTORY_TURNS = 10
+conversation_history = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
+
+# Only one guild/channel this bot has ever been added to (verified via the
+# Discord API 2026-07-23) -- hardcoded rather than auto-detected each run so
+# a future second server doesn't silently redirect the daily post.
+DAILY_DASHBOARD_CHANNEL_ID = 1358303268387946609
+DAILY_DASHBOARD_POST_TIME = dtime(hour=17, minute=0, tzinfo=ZoneInfo("America/Los_Angeles"))
+
+
+@tasks.loop(time=DAILY_DASHBOARD_POST_TIME)
+async def post_daily_dashboard_link():
+    channel = bot.get_channel(DAILY_DASHBOARD_CHANNEL_ID)
+    if channel is None:
+        print(f"[daily dashboard link] channel {DAILY_DASHBOARD_CHANNEL_ID} not found, skipping")
+        return
+    await channel.send(f"\U0001F4CA **Cortex Dashboard:** {DASHBOARD_URL}")
+
 
 @bot.event
 async def on_ready():
     print(f"Cortex Discord Online: {bot.user}")
+    if not post_daily_dashboard_link.is_running():
+        post_daily_dashboard_link.start()
 
 
 @bot.event
@@ -55,8 +87,14 @@ async def on_message(message):
 
     await message.channel.typing()
 
+    channel_key = message.channel.id
+    history = list(conversation_history[channel_key])
+
     try:
-        reply = await asyncio.to_thread(ask_cortex_ollama, message.content)
+        reply = await asyncio.to_thread(ask_cortex_ollama, message.content, None, "hermes3:latest", history)
+
+        conversation_history[channel_key].append({"role": "user", "content": message.content})
+        conversation_history[channel_key].append({"role": "assistant", "content": reply})
 
         if len(reply) > 1900:
             for i in range(0, len(reply), 1900):
